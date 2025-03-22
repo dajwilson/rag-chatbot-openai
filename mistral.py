@@ -4,7 +4,7 @@ import numpy as np
 import faiss
 import os
 
-api_key= 'ilUP0oLi1GBv7y43TjKksGYJyjqR6lYA'
+api_key= os.environ["MISTRAL_API_KEY"]
 client = Mistral(api_key=api_key)
 
 print('starting get request')
