@@ -1,5 +1,5 @@
 from langchain_chroma import Chroma
-from database_ingestion import MistralEmbeddingFunction, EmbeddingManager, query_mistral
+from database_ingestion import MistralEmbeddingFunction, EmbeddingManager
 import gradio as gr
 import os
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ if not api_key:
 # Initialize Mistral client and embedding manager
 client = Mistral(api_key=api_key)
 embedding_manager = EmbeddingManager(client)  # Pass client to the embedding manager
+mistral_embedding = MistralEmbeddingFunction()
 model = "mistral-small-latest"
 
 # ChromaDB Configuration
@@ -32,6 +33,7 @@ num_results = 5
 retriever = vector_store.as_retriever(search_kwargs={'k': num_results})
 # call this function for every message added to the chatbot
 def stream_response(message, history):
+
     # Retrieve relevant chunks based on the question
     docs = retriever.invoke(message)
 
@@ -51,13 +53,13 @@ def stream_response(message, history):
 
     The knowledge: {knowledge}
     """
-
+    messages = [{"role": "user", "content": rag_prompt}]
     partial_message = ""  # To accumulate the response
     
-    # Call Mistral API (Fixed)
+    # Call Mistral API 
     chat_response = client.chat.complete(
         model = model,  
-        messages=[{"role": "user", "content": rag_prompt}]
+        messages=messages
     )
 
     # Extract response safely
@@ -68,25 +70,6 @@ def stream_response(message, history):
         response_text = "Error: Unexpected response format."
 
     yield response_text  # Send response to Gradio
-
-# Function to run Mistral
-def run_mistral(user_message, model=model):
-    messages = [{"role": "user", "content": user_message}]
-
-    chat_response = client.chat.complete(
-        model=model,
-        messages=messages
-    )
-
-    try:
-        return chat_response.choices[0].message.content
-    except AttributeError as e:
-        print("Error extracting response:", e)
-        return "Error: Unexpected response format."
-
-# Example call (Make sure 'prompt' is defined)
-response = run_mistral("What is AI?")
-print(response)
 
 # initiate the Gradio app
 chatbot = gr.ChatInterface(stream_response, textbox=gr.Textbox(placeholder="Send to the LLM...",

@@ -142,18 +142,13 @@ def add_new_chunks_to_chroma(vector_store, chunks, batch_size=5000):
     except Exception as e:
         print(f"❌ Error adding new chunks to ChromaDB: {e}")
 
-# Query Function
-def query_mistral(vector_store, query, k=5):
-    docs = vector_store.similarity_search(query, k=k)
-    return "\n\n".join(doc.page_content for doc in docs)  # Return raw knowledge
-
 # Main Execution
 if __name__ == "__main__":
     embedding_manager = EmbeddingManager(client)
     vector_store = initialize_chroma(embedding_manager)
     existing_ids = get_existing_ids(vector_store)
     chunks = load_and_split_new_documents(existing_ids)
-    
+
     if chunks:
         add_new_chunks_to_chroma(vector_store, chunks)
     
