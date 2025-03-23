@@ -1,64 +1,100 @@
-from mistralai import Mistral
-import requests
-import numpy as np
-import faiss
+from langchain_chroma import Chroma
+from database_ingestion import MistralEmbeddingFunction, EmbeddingManager, query_mistral
+import gradio as gr
 import os
+from dotenv import load_dotenv
+from mistralai import Mistral
 
-api_key= os.environ["MISTRAL_API_KEY"]
+# Load environment variables
+load_dotenv()
+api_key = os.getenv("MISTRAL_API_KEY")
+if not api_key:
+    print("MISTRAL_API_KEY not found. Exiting...")
+    exit(1)
+
+# Initialize Mistral client and embedding manager
 client = Mistral(api_key=api_key)
+embedding_manager = EmbeddingManager(client)  # Pass client to the embedding manager
+model = "mistral-small-latest"
 
-print('starting get request')
-response = requests.get('https://raw.githubusercontent.com/run-llama/llama_index/main/docs/docs/examples/data/paul_graham/paul_graham_essay.txt')
-print('finished get request')
-text = response.text
+# ChromaDB Configuration
+CHROMA_PATH = "chroma_db"
 
-f = open('essay.txt', 'w')
-f.write(text)
-f.close()
+print("Loading existing ChromaDB...")
+vector_store = Chroma(
+    collection_name="mistral_collection",
+    persist_directory=CHROMA_PATH,
+    embedding_function=MistralEmbeddingFunction(embedding_manager),  # Pass embedding_manager
+)
+print("ChromaDB loaded successfully!")
 
-chunk_size = 2048
-chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-print(len(chunks))
+num_results = 5
+retriever = vector_store.as_retriever(search_kwargs={'k': num_results})
+# call this function for every message added to the chatbot
+def stream_response(message, history):
+    # Retrieve relevant chunks based on the question
+    docs = retriever.invoke(message)
 
-def get_text_embedding(input):
-    embeddings_batch_response = client.embeddings.create(
-          model="mistral-embed",
-          inputs=input
-      )
-    return embeddings_batch_response.data[0].embedding
-text_embeddings = np.array([get_text_embedding(chunk) for chunk in chunks])
+    # Compile retrieved knowledge
+    knowledge = "\n\n".join(doc.page_content for doc in docs)
 
-d = text_embeddings.shape[1]
-index = faiss.IndexFlatL2(d)
-index.add(text_embeddings)
+    # Construct prompt
+    rag_prompt = f"""
+    You are an assistant which answers questions based on provided knowledge.
+    While answering, you don't use your internal knowledge, 
+    but solely the information in the "The knowledge" section.
+    You don't mention anything to the user about the provided knowledge.
 
-question = "What were the two main things the author worked on before college?"
-question_embeddings = np.array([get_text_embedding(question)])
+    The question: {message}
 
-D, I = index.search(question_embeddings, k=2) # distance, index
-retrieved_chunk = [chunks[i] for i in I.tolist()[0]]
+    Conversation history: {history}
 
-prompt = f"""
-Context information is below.
----------------------
-{retrieved_chunk}
----------------------
-Given the context information and not prior knowledge, answer the query.
-Query: {question}
-Answer:
-"""
+    The knowledge: {knowledge}
+    """
 
-def run_mistral(user_message, model="mistral-small-latest"):
-    messages = [
-        {
-            "role": "user", "content": user_message
-        }
-    ]
+    partial_message = ""  # To accumulate the response
+    
+    # Call Mistral API (Fixed)
+    chat_response = client.chat.complete(
+        model=model,  # Specify the model explicitly
+        messages=[{"role": "user", "content": rag_prompt}]
+    )
+
+    # Extract response safely
+    try:
+        response_text = chat_response.choices[0].message.content
+    except AttributeError as e:
+        print("Error extracting response:", e)
+        response_text = "Error: Unexpected response format."
+
+    yield response_text  # Send response to Gradio
+
+# Function to run Mistral
+def run_mistral(user_message, model=model):
+    messages = [{"role": "user", "content": user_message}]
+
     chat_response = client.chat.complete(
         model=model,
         messages=messages
     )
-    return (chat_response.choices[0].message.content)
 
-print(run_mistral(prompt))
-print("-- end of script--")
+    try:
+        return chat_response.choices[0].message.content
+    except AttributeError as e:
+        print("Error extracting response:", e)
+        return "Error: Unexpected response format."
+
+# Example call (Make sure 'prompt' is defined)
+response = run_mistral("What is AI?")
+print(response)
+
+# initiate the Gradio app
+chatbot = gr.ChatInterface(stream_response, textbox=gr.Textbox(placeholder="Send to the LLM...",
+    container=False,
+    autoscroll=True,
+    scale=7),
+)
+
+# Launch the Gradio app
+print("Launching Gradio chatbot")
+chatbot.launch()

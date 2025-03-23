@@ -1,70 +1,92 @@
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
+from database_ingestion import MistralEmbeddingFunction, EmbeddingManager, query_mistral
 import gradio as gr
-
-# import the .env file
+import os
 from dotenv import load_dotenv
+from mistralai import Mistral
+
+# Load environment variables
 load_dotenv()
+api_key = os.getenv("MISTRAL_API_KEY")
+if not api_key:
+    print("MISTRAL_API_KEY not found. Exiting...")
+    exit(1)
 
-# configuration
-DATA_PATH = r"data"
-CHROMA_PATH = r"chroma_db"
+# Initialize Mistral client and embedding manager
+client = Mistral(api_key=api_key)
+embedding_manager = EmbeddingManager(client)  # Pass client to the embedding manager
+model = "mistral-small-latest"
 
-embeddings_model = OpenAIEmbeddings(model="text-embedding-3-large")
+# ChromaDB Configuration
+CHROMA_PATH = "chroma_db"
 
-# initiate the model
-llm = ChatOpenAI(temperature=0.5, model='gpt-4o-mini')
-
-# connect to the chromadb
+print("Loading existing ChromaDB...")
 vector_store = Chroma(
-    collection_name="example_collection",
-    embedding_function=embeddings_model,
-    persist_directory=CHROMA_PATH, 
+    collection_name="mistral_collection",
+    persist_directory=CHROMA_PATH,
+    embedding_function=MistralEmbeddingFunction(embedding_manager),  # Pass embedding_manager
 )
+print("ChromaDB loaded successfully!")
 
-# Set up the vectorstore to be the retriever
 num_results = 5
 retriever = vector_store.as_retriever(search_kwargs={'k': num_results})
-
 # call this function for every message added to the chatbot
 def stream_response(message, history):
-    #print(f"Input: {message}. History: {history}\n")
-
-    # retrieve the relevant chunks based on the question asked
+    # Retrieve relevant chunks based on the question
     docs = retriever.invoke(message)
 
-    # add all the chunks to 'knowledge'
-    knowledge = ""
+    # Compile retrieved knowledge
+    knowledge = "\n\n".join(doc.page_content for doc in docs)
 
-    for doc in docs:
-        knowledge += doc.page_content+"\n\n"
+    # Construct prompt
+    rag_prompt = f"""
+    You are an assistant which answers questions based on provided knowledge.
+    While answering, you don't use your internal knowledge, 
+    but solely the information in the "The knowledge" section.
+    You don't mention anything to the user about the provided knowledge.
 
+    The question: {message}
 
-    # make the call to the LLM (including prompt)
-    if message is not None:
+    Conversation history: {history}
 
-        partial_message = ""
+    The knowledge: {knowledge}
+    """
 
-        rag_prompt = f"""
-        You are an assistent which answers questions based on knowledge which is provided to you.
-        While answering, you don't use your internal knowledge, 
-        but solely the information in the "The knowledge" section.
-        You don't mention anything to the user about the povided knowledge.
+    partial_message = ""  # To accumulate the response
+    
+    # Call Mistral API (Fixed)
+    chat_response = client.chat.complete(
+        model = model,  
+        messages=[{"role": "user", "content": rag_prompt}]
+    )
 
-        The question: {message}
+    # Extract response safely
+    try:
+        response_text = chat_response.choices[0].message.content
+    except AttributeError as e:
+        print("Error extracting response:", e)
+        response_text = "Error: Unexpected response format."
 
-        Conversation history: {history}
+    yield response_text  # Send response to Gradio
 
-        The knowledge: {knowledge}
+# Function to run Mistral
+def run_mistral(user_message, model=model):
+    messages = [{"role": "user", "content": user_message}]
 
-        """
+    chat_response = client.chat.complete(
+        model=model,
+        messages=messages
+    )
 
-        #print(rag_prompt)
+    try:
+        return chat_response.choices[0].message.content
+    except AttributeError as e:
+        print("Error extracting response:", e)
+        return "Error: Unexpected response format."
 
-        # stream the response to the Gradio App
-        for response in llm.stream(rag_prompt):
-            partial_message += response.content
-            yield partial_message
+# Example call (Make sure 'prompt' is defined)
+response = run_mistral("What is AI?")
+print(response)
 
 # initiate the Gradio app
 chatbot = gr.ChatInterface(stream_response, textbox=gr.Textbox(placeholder="Send to the LLM...",
@@ -73,5 +95,6 @@ chatbot = gr.ChatInterface(stream_response, textbox=gr.Textbox(placeholder="Send
     scale=7),
 )
 
-# launch the Gradio app
+# Launch the Gradio app
+print("Launching Gradio chatbot")
 chatbot.launch()
