@@ -1,5 +1,5 @@
 from langchain_chroma import Chroma
-from database_ingestion import MistralEmbeddingFunction, EmbeddingManager
+from database_ingestion import EmbeddingManager
 import gradio as gr
 import os
 from dotenv import load_dotenv
@@ -15,7 +15,7 @@ if not api_key:
 # Initialize Mistral client and embedding manager
 client = Mistral(api_key=api_key)
 embedding_manager = EmbeddingManager(client)  # Pass client to the embedding manager
-mistral_embedding = MistralEmbeddingFunction()
+mistral_embedding = EmbeddingManager(client)
 model = "mistral-small-latest"
 
 # ChromaDB Configuration
@@ -25,7 +25,7 @@ print("Loading existing ChromaDB...")
 vector_store = Chroma(
     collection_name="mistral_collection",
     persist_directory=CHROMA_PATH,
-    embedding_function=MistralEmbeddingFunction(embedding_manager),  # Pass embedding_manager
+    embedding_function=embedding_manager,  # Pass embedding_manager
 )
 print("ChromaDB loaded successfully!")
 
